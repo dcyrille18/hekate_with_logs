@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and overwrite even if the latest tag is already released
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  UPSTREAM: CTCaer/hekate
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - name: Resolve upstream tag
+        id: tag
+        run: |
+          TAG="$(gh release view --repo "$UPSTREAM" --json tagName -q .tagName)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Only the latest upstream tag is built, and only if not released here yet.
+          if [ "$FORCE" != true ] && gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch upstream source and apply patches
+        if: steps.tag.outputs.skip != 'true'
+        run: |
+          git clone --depth 1 --branch "${{ steps.tag.outputs.tag }}" "https://github.com/$UPSTREAM" src
+          for p in ci/patches/*.patch; do
+            git -C src apply --check "../$p"
+            git -C src apply "../$p"
+          done
+          cp ci/Dockerfile ci/.dockerignore src/
+          mkdir -p src/tools
+          cp ci/tools/package_release.sh src/tools/
+
+      - name: Download upstream release zip (prebuilt resources)
+        if: steps.tag.outputs.skip != 'true'
+        run: |
+          mkdir -p src/build
+          gh release download "${{ steps.tag.outputs.tag }}" --repo "$UPSTREAM" \
+            --pattern '*_Nyx_*.zip' --output src/build/upstream.zip
+
+      - name: Build and package
+        if: steps.tag.outputs.skip != 'true'
+        working-directory: src
+        run: |
+          docker build -t hekate-build .
+          docker run --rm -e BASE_ZIP=build/upstream.zip -v "$PWD":/work hekate-build
+          ls output/hekate_ctcaer_*_Nyx_*.zip
+
+      - name: Publish release
+        if: steps.tag.outputs.skip != 'true'
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          ZIP="$(ls src/output/hekate_ctcaer_*_Nyx_*.zip)"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "$ZIP" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "$TAG (launch logs enabled by default)" \
+              --notes "Upstream $UPSTREAM $TAG with launch logs enabled by default."
+          fi
+
+      - name: Open an issue on failure
+        if: failure()
+        run: |
+          TITLE="Release build failed for ${{ steps.tag.outputs.tag }}"
+          URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [ -z "$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number -q '.[]')" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --body "The release workflow failed (the patch may no longer apply). Run: $URL"
+          fi

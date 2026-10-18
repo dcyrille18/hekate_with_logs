@@ -1,0 +1,17 @@
+diff --git a/nyx/nyx_gui/frontend/gui.c b/nyx/nyx_gui/frontend/gui.c
+index f1bff0b7..b8b50a35 100644
+--- a/nyx/nyx_gui/frontend/gui.c
++++ b/nyx/nyx_gui/frontend/gui.c
+@@ -1700,8 +1700,10 @@ static lv_res_t _create_window_home_launch(lv_obj_t *btn)
+ 	else
+ 		win = create_window_launch(SYMBOL_GPS" More Configurations");
+ 
+-	lv_win_add_btn(win, NULL, SYMBOL_LIST" Logs #D0D0D0 OFF#", logs_onoff_toggle);
+-	launch_logs_enable = false;
++	char logs_label[64];
++	s_printf(logs_label, SYMBOL_LIST" Logs %s ON #", text_color);
++	lv_win_add_btn(win, NULL, logs_label, logs_onoff_toggle);
++	launch_logs_enable = true;
+ 
+ 	lv_cont_set_fit(lv_page_get_scrl(lv_win_get_content(win)), false, false);
+ 	lv_page_set_scrl_height(lv_win_get_content(win), 572);
